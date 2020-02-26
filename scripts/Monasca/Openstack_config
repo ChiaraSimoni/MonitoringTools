@@ -1,0 +1,182 @@
+-------------------------------------
+# openstack install, then change to root and add user "stack", to which you give admin permissions
+# then you clone the repo from git and modify the local.conf file
+# use stack.sh to run it, unstack.sh if something goes wrong, clean.sh for a more drastic clean-up (removes everything)
+
+sudo apt update -y
+sudo apt upgrade -y 
+sudo reboot
+sudo -i
+adduser stack
+echo "stack ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+# exit session and login again as stack
+git clone https://git.openstack.org/openstack-dev/devstack
+cd devstack
+sudo cp samples/local.conf ./local.conf
+sudo nano local.conf
+./stack.sh
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ALL-IN-ONE INSTALLATION
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#minimal configurations
+
+[[local|localrc]]
+
+# Password for KeyStone, Database, RabbitMQ and Service
+ADMIN_PASSWORD=StrongAdminSecret
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+
+# Host IP - get your Server/VM IP address from ip addr command
+# if you use Bridged Adapter Network config it's inferred during the installation
+#HOST_IP=10.208.0.10
+
+------------------------------------------------------
+MONASCA API INSTALLATION (devstack plugin)
+------------------------------------------------------
+[[local|localrc]]
+
+DATABASE_PASSWORD=secretdatabase
+RABBIT_PASSWORD=secretrabbit
+ADMIN_PASSWORD=secretadmin
+SERVICE_PASSWORD=secretservice
+#SERVICE_TOKEN=111222333444
+
+LOGFILE=$DEST/logs/stack.sh.log
+LOGDIR=$DEST/logs
+LOG_COLOR=False
+
+# The following two variables allow switching between Java and Python for the implementations
+# of the Monasca API and the Monasca Persister. If these variables are not set, then the
+# default is to install the Python implementations of both the Monasca API and the Monasca Persister.
+
+# Uncomment of the following two lines to choose Java or Python for the Monasca Pesister.
+#MONASCA_PERSISTER_IMPLEMENTATION_LANG=${MONASCA_PERSISTER_IMPLEMENTATION_LANG:-java}
+MONASCA_PERSISTER_IMPLEMENTATION_LANG=${MONASCA_PERSISTER_IMPLEMENTATION_LANG:-python}
+
+# Uncomment one of the following two lines to choose either InfluxDB or Vertica.
+# default "influxdb" is selected as metric DB
+MONASCA_METRICS_DB=${MONASCA_METRICS_DB:-influxdb}
+# MONASCA_METRICS_DB=${MONASCA_METRICS_DB:-cassandra}
+
+# This line will enable all of Monasca.
+enable_plugin monasca-api https://opendev.org/openstack/monasca-api
+
+# add this line if you want monasca to run with the bare minimum openstack components
+# you can add the services you want to run in the second line
+#disable_all_services
+#enable_service rabbit mysql key horizon tempest
+#enable_plugin monasca-tempest-plugin https://opendev.org/openstack/monasca-tempest-plugin
+
+###################################
+### Monasca AGENT Configuration ###
+###################################
+
+sudo apt-get install python-pip
+sudo pip install --upgrade pip
+sudo pip install monasca-agent
+
+# The Monasca agent has a script, called “monasca-setup”, that should be used to automatically configure the Agent to send metrics to a Monasca API. 
+# This script will create the agent.yaml configuration file as well as any plugin configuration yaml files needed to monitor the processes on the local machine. 
+# Additionally this will create an appropriate startup script for the system and enable the agent to start on boot. 
+# The monasca-setup script will then auto-detect certain applications and OpenStack processes that are running on the machine. 
+# Lastly it will start the agent.
+# The agent configuration files are located in /etc/monasca/agent -> You have to check on the Monasca API vm these config so you can use them later on the other agents
+# The plugin configuration files are located in /etc/monasca/agent/conf.d.
+# monasca-setup is located in [installed prefix dir]/bin/monasca-setup and can be run as follows:
+
+$ sudo monasca-setup --username KEYSTONE_USERNAME \
+  --password KEYSTONE_PASSWORD --project_name KEYSTONE_PROJECT_NAME \
+  --keystone_url http://URL_OF_KEYSTONE_API:35357/v3
+
+# Skip most detection plugins in monasca-setup with the --system_only flag. 
+# You can then come back later and run individual detection plugins without additional arguments, for example monasca-setup -d mysql. 
+# This allows a base install to setup the agent and required credentials then later easily add additional services and monitoring.
+# Alternatively you can disable selected detection plugins with the --skip_detection_plugins parameter.
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+MULTIREGION INSTALLATION
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+REGION ONE
+-----------------------------------------------------------
+# you can use the /etc/hosts to resolve the names of the nodes if you use a multinode installation 
+------configurazioni suggerite di base
+ADMIN_PASSWORD=nomoresecret
+DATABASE_PASSWORD=stackdb
+RABBIT_PASSWORD=stackqueue
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+LOGFILE=$DEST/logs/stack.sh.log
+LOGDAYS=2
+SWIFT_HASH=66a3d6b56c1f479c8b4e70ab5c2000f5
+SWIFT_REPLICAS=1
+SWIFT_DATA_DIR=$DEST/data
+
+######################################
+### in aggiunta per il multiregion ###
+######################################
+
+REGION_NAME=RegionOne
+
+-----------------------------------------------------------
+REGION TWO
+-----------------------------------------------------------
+
+------configurazioni suggerite di base
+ADMIN_PASSWORD=nomoresecret
+DATABASE_PASSWORD=stackdb
+RABBIT_PASSWORD=stackqueue
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+LOGFILE=$DEST/logs/stack.sh.log
+LOGDAYS=2
+SWIFT_HASH=66a3d6b56c1f479c8b4e70ab5c2000f5
+SWIFT_REPLICAS=1
+SWIFT_DATA_DIR=$DEST/data
+
+######################################
+### in aggiunta per il multiregion ###
+######################################
+
+disable_service horizon
+KEYSTONE_SERVICE_HOST=<KEYSTONE_IP_ADDRESS_FROM_REGION_ONE>
+KEYSTONE_AUTH_HOST=<KEYSTONE_IP_ADDRESS_FROM_REGION_ONE>
+REGION_NAME=RegionTwo
+KEYSTONE_REGION_NAME=RegionOne
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ERRORS
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+############
+## exit 1 ##
+############
+
+# The actual error is that devstack is unable to create a virtual environment for itself because it does not have access to some file in .cache directory. Unfortunately, this error will only pop up the 
+# first time you are trying to install devstack.
+
+sudo chown -R stack:stack .cache/
+virtualenv requirements/
+
+# At this point, you should have pip in your .cache directory.
+# The next step is to remove everything except /devstack and .cache directories and run
+# PS : the aim is to set up virtual environment for devstack. You may choose your way of doing it.
+
+cd devstack/
+./clean.sh
+./stack.sh
+
+#this solution usually leads to error with exit 127 so if it happens just solve it
+# sometimes it's enough to use the chown and then the virtualenv command
+
+##############
+## exit 127 ##
+##############
+
+# With Ubuntu Desktop
+
+virtualenv /opt/stack/requirements/.venv
+
+# and then try again (eventually with sudo)
+
+
